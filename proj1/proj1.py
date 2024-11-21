@@ -2,16 +2,13 @@ import os
 import shutil
 import pandas as pd
 import streamlit as st
-
 # Function to process seating allocation
-def process_seating_allocation(input_file):
+def process_seating_allocation(input_file, buffer, dense_mode):
     ip_1 = pd.read_excel(input_file, sheet_name="ip_1")
     ip_2 = pd.read_excel(input_file, sheet_name="ip_2")
     ip_3 = pd.read_excel(input_file, sheet_name="ip_3")
     ip_4 = pd.read_excel(input_file, sheet_name="ip_4")
 
-    buffer = 0  # Buffer for students per room
-    dense_mode = False  # If True, allocate fully; If False, allocate up to 50% per course
     max_fill = 1.0 if dense_mode else 0.5
 
     # Prepare data
@@ -42,9 +39,10 @@ def process_seating_allocation(input_file):
                     continue
 
                 allocated_rolls = []
+                # Allocate to rooms in Block 9 first
                 for room, capacity in list(vacant_rooms_block9.items()):
                     max_alloc = int(initial_room_capacity[room] * max_fill)
-                    alloc = min(total_students, max_alloc)
+                    alloc = min(total_students, max_alloc, vacant_rooms_block9[room])  # Ensure we don't exceed available capacity
                     allocated_rolls.extend(rolls[:alloc])
                     rolls = rolls[alloc:]
                     total_students -= alloc
@@ -55,11 +53,12 @@ def process_seating_allocation(input_file):
                     if total_students == 0:
                         break
 
+                # If still students remain, allocate to other rooms
                 if total_students > 0:
                     allocated_rolls = []
                     for room, capacity in list(vacant_rooms_lt.items()):
                         max_alloc = int(initial_room_capacity[room] * max_fill)
-                        alloc = min(total_students, max_alloc)
+                        alloc = min(total_students, max_alloc, vacant_rooms_lt[room])  # Ensure we don't exceed available capacity
                         allocated_rolls.extend(rolls[:alloc])
                         rolls = rolls[alloc:]
                         total_students -= alloc
@@ -70,11 +69,13 @@ def process_seating_allocation(input_file):
                         if total_students == 0:
                             break
 
+                # If there are still students remaining
                 if total_students > 0:
                     course_roll_mapping[course] = rolls
                 else:
                     del course_roll_mapping[course]
 
+            # Keep track of room vacancy details
             room_vacancy_details.extend([
                 [date, schedule["Day"], session, room, initial_room_capacity[room], room_block[room], vacant_rooms_block9.get(room, vacant_rooms_lt.get(room, 0))]
                 for room in room_capacity
@@ -102,7 +103,7 @@ def generate_attendance_sheets(op_1, roll_name_mapping):
         rolls = row["Roll_list"].split(";")
         
         attendance_data = [{"Roll": roll, "Name": roll_name_mapping.get(roll, ""), "Signature": ""} for roll in rolls]
-        for _ in range(5):
+        for _ in range(5):  # Add empty rows for extra students
             attendance_data.append({"Roll": "", "Name": "", "Signature": ""})
 
         df = pd.DataFrame(attendance_data)
@@ -119,13 +120,16 @@ def main():
     
     uploaded_file = st.file_uploader("Upload the Excel file", type="xlsx")
     
+    buffer = st.slider("Set Buffer (Number of students to leave empty per room)", 0, 10, 0)
+    dense_mode = st.checkbox("Enable Dense Mode (Allocate rooms fully)")
+
     if uploaded_file is not None:
         st.write("Processing the uploaded file...")
         
         ip_4 = pd.read_excel(uploaded_file, sheet_name="ip_4")
         roll_name_mapping = ip_4.set_index("Roll")["Name"].to_dict()
         
-        op_1, op_2 = process_seating_allocation(uploaded_file)
+        op_1, op_2 = process_seating_allocation(uploaded_file, buffer, dense_mode)
         
         attendance_files = generate_attendance_sheets(op_1, roll_name_mapping)
         
